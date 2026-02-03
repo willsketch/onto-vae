@@ -2,6 +2,7 @@ import os
 import contextlib
 import io
 import sys
+import warnings
 import pandas as pd
 import numpy as np
 import itertools
@@ -492,6 +493,18 @@ class Ontobj():
         if str(top_thresh) + '_' + str(bottom_thresh) not in self.data.keys():
             self.data[str(top_thresh) + '_' + str(bottom_thresh)] = {}
 
+        missing_genes = set(expr.index) - set(merged_expr.columns)
+        if missing_genes:
+            warnings.warn(
+                f"{len(missing_genes)} expr genes missing in trimmed ontology."
+                "They will be ignored.",
+                RuntimeWarning
+            )
+
+        merged_expr_to_idx = {g: i for i, g in enumerate(merged_expr.columns)}
+        expr_to_merged_idx = np.array([merged_expr_to_idx.get(g, -1) for g in expr.index], dtype=np.int32)
+        GONNECT_GENE_MAP = f'{name}_GONNECT_GENE_MAP'
+        self.data[str(top_thresh) + '_' + str(bottom_thresh)][GONNECT_GENE_MAP] = expr_to_merged_idx
         self.data[str(top_thresh) + '_' + str(bottom_thresh)][name] = merged_expr.to_numpy()
 
     

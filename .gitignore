@@ -1,3 +1,8 @@
 .ipynb_checkpoints
 /onto_vae/__pycache__
 /dist
+/splits
+/data
+.idea/
+vignette.ipynb
+OntoVae_image.sif

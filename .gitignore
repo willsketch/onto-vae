@@ -6,3 +6,7 @@
 .idea/
 vignette.ipynb
 OntoVae_image.sif
+job_ids.txt
+splits_SEAAD/
+splits_TCGA/
+__pycache__/

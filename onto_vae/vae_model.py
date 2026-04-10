@@ -2,6 +2,7 @@
 
 import sys
 import numpy as np
+import pandas as pd
 import torch
 from torch import optim
 import torch.nn as nn
@@ -37,7 +38,7 @@ class OntoVAE(nn.Module):
         dropout rate for latent space, default is 0.5
     """
 
-    def __init__(self, ontobj, dataset, top_thresh=1000, bottom_thresh=30, neuronnum=3, drop=0.2, z_drop=0.5):
+    def __init__(self, ontobj, dataset, top_thresh=1000, bottom_thresh=30, neuronnum=3, drop=0.2, z_drop=0.5, mask_override=None):
         super(OntoVAE, self).__init__()
 
         if not str(top_thresh) + '_' + str(bottom_thresh) in ontobj.genes.keys():
@@ -48,8 +49,11 @@ class OntoVAE(nn.Module):
         self.bottom = bottom_thresh
         self.genes = ontobj.genes[str(top_thresh) + '_' + str(bottom_thresh)]
         self.in_features = len(self.genes)
-        # self.mask_list = ontobj.masks[str(top_thresh) + '_' + str(bottom_thresh)]['decoder']
-        self.mask_list = ontobj.masks[str(top_thresh) + '_' + str(bottom_thresh)]
+        if mask_override is not None:
+            self.mask_list = mask_override
+        else:
+            raw_masks = ontobj.masks[str(top_thresh) + '_' + str(bottom_thresh)]
+            self.mask_list = raw_masks['decoder'] if isinstance(raw_masks, dict) else raw_masks
         self.mask_list = [torch.tensor(m, dtype=torch.float32) for m in self.mask_list]
         self.layer_dims_dec =  np.array([self.mask_list[0].shape[1]] + [m.shape[0] for m in self.mask_list])
         self.latent_dim = self.layer_dims_dec[0] * neuronnum
@@ -274,7 +278,7 @@ class OntoVAE(nn.Module):
             print(f"Val Loss: {val_epoch_loss:.4f}")
 
 
-    def _pass_data(self, data, output):
+    def _pass_data(self, data, output, raw=False):
         """
         Passes data through the model.
 
@@ -285,6 +289,9 @@ class OntoVAE(nn.Module):
         output
             'act': return pathway activities
             'rec': return reconstructed values
+        raw
+            if True, return individual neuron activations (neuronnum per term)
+            instead of averaging. Only applies when output='act'.
         """
 
         # set to eval mode
@@ -294,8 +301,9 @@ class OntoVAE(nn.Module):
         with torch.no_grad():
             z = self.get_embedding(data)
             z = z.to('cpu').detach().numpy()
-        
-        z = np.array(np.split(z, z.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
+
+        if not raw:
+            z = np.array(np.split(z, z.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
 
         # get activities from decoder
         activation = {}
@@ -310,25 +318,26 @@ class OntoVAE(nn.Module):
             key = str(i)
             value = self.decoder.decoder[i][0].register_forward_hook(get_activation(i))
             hooks[key] = value
-        
+
         with torch.no_grad():
             reconstruction, _, _ = self.forward(data)
 
         act = torch.cat(list(activation.values()), dim=1).numpy()
-        act = np.array(np.split(act, act.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
-        
+        if not raw:
+            act = np.array(np.split(act, act.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
+
         # remove hooks
         for h in hooks:
             hooks[h].remove()
 
         # return pathway activities or reconstructed gene values
         if output == 'act':
-            return np.hstack((z,act))
+            return np.hstack((z, act))
         if output == 'rec':
             return reconstruction.to('cpu').detach().numpy()
-        
 
-    def get_pathway_activities(self, ontobj, dataset, terms=None):
+
+    def get_pathway_activities(self, ontobj, dataset, terms=None, raw=False):
         """
         Retrieves pathway activities from latent space and decoder.
 
@@ -339,7 +348,13 @@ class OntoVAE(nn.Module):
         dataset
             which dataset to use for pathway activity retrieval
         terms
-            list of ontology term ids whose activities should be retrieved
+            list of ontology term ids whose activities should be retrieved.
+            Ignored when raw=True; filter from the returned DataFrame instead.
+        raw
+            if True, return a DataFrame with a MultiIndex column (go_id, neuron)
+            containing individual neuron activations. Collapse back to one value
+            per term with: df.groupby(level='go_id', axis=1).mean()
+            if False (default), return a numpy array with averaged activations.
         """
         if self.ontology != ontobj.description:
             raise ValueError('Wrong ontology provided, should be ' + self.ontology)
@@ -350,14 +365,22 @@ class OntoVAE(nn.Module):
         data = torch.tensor(data, dtype=torch.float32).to(self.device)
 
         # retrieve pathway activities
-        act = self._pass_data(data, 'act')
+        act = self._pass_data(data, 'act', raw=raw)
+
+        if raw:
+            annot = ontobj.annot[str(self.top) + '_' + str(self.bottom)]
+            go_ids = annot['ID'].tolist()
+            cols = pd.MultiIndex.from_tuples(
+                [(gid, j) for gid in go_ids for j in range(self.neuronnum)],
+                names=['go_id', 'neuron']
+            )
+            return pd.DataFrame(act, columns=cols)
 
         # if term was specified, subset
         if terms is not None:
             annot = ontobj.annot[str(self.top) + '_' + str(self.bottom)]
             term_ind = annot[annot.ID.isin(terms)].index.to_numpy()
-
-            act = act[:,term_ind]
+            act = act[:, term_ind]
 
         return act
 
@@ -720,7 +743,7 @@ class OntoEncVAE(nn.Module):
             print(f"Train Loss: {train_epoch_loss:.4f}")
             print(f"Val Loss: {val_epoch_loss:.4f}")
 
-    def _pass_data(self, data, output):
+    def _pass_data(self, data, output, raw=False):
         """
         Passes data through the model.
 
@@ -731,6 +754,9 @@ class OntoEncVAE(nn.Module):
         output
             'act': return pathway activities
             'rec': return reconstructed values
+        raw
+            if True, return individual neuron activations (neuronnum per term)
+            instead of averaging. Only applies when output='act'.
         """
 
         # convert data to tensor and move to device
@@ -743,8 +769,9 @@ class OntoEncVAE(nn.Module):
         with torch.no_grad():
             z = self.get_embedding(data)
             z = z.to('cpu').detach().numpy()
-        
-        z = np.array(np.split(z, z.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
+
+        if not raw:
+            z = np.array(np.split(z, z.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
 
         # get activities from encoder
         activation = {}
@@ -759,25 +786,26 @@ class OntoEncVAE(nn.Module):
             key = str(i)
             value = self.encoder.encoder[i][0].register_forward_hook(get_activation(i))
             hooks[key] = value
-        
+
         with torch.no_grad():
             reconstruction, _, _ = self.forward(data)
 
         act = torch.cat(list(activation.values())[::-1], dim=1).detach().numpy()
-        act = np.array(np.split(act, act.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
-        
+        if not raw:
+            act = np.array(np.split(act, act.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
+
         # remove hooks
         for h in hooks:
             hooks[h].remove()
 
         # return pathway activities or reconstructed gene values
         if output == 'act':
-            return np.hstack((z,act))
+            return np.hstack((z, act))
         if output == 'rec':
             return reconstruction.to('cpu').detach().numpy()
 
 
-    def get_pathway_activities(self, ontobj, dataset, terms=None):
+    def get_pathway_activities(self, ontobj, dataset, terms=None, raw=False):
         """
         Retrieves pathway activities from encoder and latent space.
 
@@ -788,7 +816,13 @@ class OntoEncVAE(nn.Module):
         dataset
             which dataset to use for pathway activity retrieval
         terms
-            list of ontology term ids whose activities should be retrieved
+            list of ontology term ids whose activities should be retrieved.
+            Ignored when raw=True; filter from the returned DataFrame instead.
+        raw
+            if True, return a DataFrame with a MultiIndex column (go_id, neuron)
+            containing individual neuron activations. Collapse back to one value
+            per term with: df.groupby(level='go_id', axis=1).mean()
+            if False (default), return a numpy array with averaged activations.
         """
         if self.ontology != ontobj.description:
             raise ValueError('Wrong ontology provided, should be ' + self.ontology)
@@ -799,14 +833,22 @@ class OntoEncVAE(nn.Module):
         data = torch.tensor(data, dtype=torch.float32).to(self.device)
 
         # retrieve pathway activities
-        act = self._pass_data(data, 'act')
+        act = self._pass_data(data, 'act', raw=raw)
+
+        if raw:
+            annot = ontobj.annot[str(self.top) + '_' + str(self.bottom)]
+            go_ids = annot['ID'].tolist()
+            cols = pd.MultiIndex.from_tuples(
+                [(gid, j) for gid in go_ids for j in range(self.neuronnum)],
+                names=['go_id', 'neuron']
+            )
+            return pd.DataFrame(act, columns=cols)
 
         # if term was specified, subset
         if terms is not None:
             annot = ontobj.annot[str(self.top) + '_' + str(self.bottom)]
             term_ind = annot[annot.ID.isin(terms)].index.to_numpy()
-
-            act = act[:,term_ind]
+            act = act[:, term_ind]
 
         return act
 

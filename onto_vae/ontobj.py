@@ -380,6 +380,79 @@ class Ontobj():
         self.masks[str(top_thresh) + '_' + str(bottom_thresh)][module] = masks
 
 
+    def randomize_masks(self, top_thresh=1000, bottom_thresh=30, method='degree_preserving', Q=100, seed=None):
+        """
+        Returns a randomized copy of the decoder masks without modifying the ontobj.
+
+        Parameters
+        ----------
+        top_thresh / bottom_thresh
+            must match a prior call to create_masks()
+        method
+            'random': randomly place edges preserving only total edge count per mask
+            'degree_preserving': edge swaps preserving row and column sums (Espinoza 2012)
+        Q
+            swap multiplier for degree_preserving; n_swaps = Q * n_edges (default: 100)
+        seed
+            random seed for reproducibility
+
+        Returns
+        -------
+        list of randomized mask arrays (does not modify self.masks)
+        """
+        key = str(top_thresh) + '_' + str(bottom_thresh)
+        if key not in self.masks:
+            raise ValueError('Masks not found, run create_masks first.')
+
+        stored = self.masks[key]
+        masks = stored['decoder'] if isinstance(stored, dict) else stored
+
+        rng = np.random.default_rng(seed)
+        rand_masks = []
+
+        for mask in masks:
+            m = mask.copy()
+
+            if method == 'random':
+                n_rows, n_cols = m.shape
+                n_edges = int(m.sum())
+                rand_m = np.zeros_like(m)
+                flat_indices = rng.choice(n_rows * n_cols, size=n_edges, replace=False)
+                rand_m.flat[flat_indices] = 1
+                rand_masks.append(rand_m)
+
+            elif method == 'degree_preserving':
+                edge_rows, edge_cols = np.where(m)
+                edges = [[int(r), int(c)] for r, c in zip(edge_rows, edge_cols)]
+                n_edges = len(edges)
+                n_swaps = Q * n_edges
+                successful = 0
+
+                while successful < n_swaps:
+                    i, j = rng.choice(n_edges, size=2, replace=False)
+                    rA, cX = edges[i]
+                    rB, cY = edges[j]
+
+                    if rA == rB or cX == cY:
+                        continue
+                    if m[rA, cY] or m[rB, cX]:
+                        continue
+
+                    m[rA, cX] = 0
+                    m[rA, cY] = 1
+                    m[rB, cY] = 0
+                    m[rB, cX] = 1
+                    edges[i][1] = cY
+                    edges[j][1] = cX
+                    successful += 1
+
+                rand_masks.append(m)
+
+            else:
+                raise ValueError(f"Unknown method '{method}'. Choose 'random' or 'degree_preserving'.")
+
+        return rand_masks
+
     def _decoder_masks(self, depth, bin_mat_list):
         """
         Helper function to create binary masks for decoder
@@ -496,10 +569,10 @@ class Ontobj():
         missing_genes = set(expr.index) - set(merged_expr.columns)
         if missing_genes:
             warnings.warn(
-                f"{len(missing_genes)} expr genes missing in trimmed ontology."
-                "They will be ignored.",
+                f"{len(missing_genes)} expr genes missing in trimmed ontology and will be ignored.",
                 RuntimeWarning
             )
+
 
         merged_expr_to_idx = {g: i for i, g in enumerate(merged_expr.columns)}
         expr_to_merged_idx = np.array([merged_expr_to_idx.get(g, -1) for g in expr.index], dtype=np.int32)

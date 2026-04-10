@@ -26,7 +26,7 @@ if __name__ == "__main__":
 
     DATA_PATH = os.path.join(os.getcwd(), 'data/TCGA_complete_bp_top1k.csv')
     SEEDS = [2, 3, 4, 5, 6]
-    OUTPUT_DIR = os.path.join(os.getcwd(), 'splits')
+    OUTPUT_DIR = os.path.join(os.getcwd(), 'splits_TCGA')
     expr_data_df = pd.read_csv(DATA_PATH)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)

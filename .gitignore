@@ -10,3 +10,5 @@ job_ids.txt
 splits_SEAAD/
 splits_TCGA/
 __pycache__/
+SEADD_job.sbatch
+TCGA_job.sbatch

@@ -1,37 +1,29 @@
 Bootstrap: docker
 From: condaforge/miniforge3:latest
 
-%files
-    data/gene_annot_ontovae.txt OntoVae/data/gene_annot_ontovae.txt
-    data/go-basic.obo OntoVae/data/go-basic.obo
-    data/TCGA_complete_bp_top1k.csv OntoVae/data/TCGA_complete_bp_top1k.csv
-    data_splits.py OntoVae/data_splits.py
-    OntoVAE-Runs.py OntoVae/OntoVAE-Runs.py
-
-
 %post
-    # Update and install necessary packages
-    apt-get update && apt-get install -y tree time vim ncdu speedtest-cli build-essential
+    # Install system packages
+    apt-get update && apt-get install -y git build-essential
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-    # clone github repo.
-    git clone https://github.com/willsketch/onto-vae.git
+    # Install onto-vae package from GitHub (provides onto_vae Python package)
+    git clone https://github.com/willsketch/onto-vae.git /opt/onto-vae
 
-    # Create conda environment
+    # Create conda environment and install dependencies
     conda create -n ontovae python=3.9 -y
-
     conda run -n ontovae pip install -U pip setuptools
-
-    # Install package in editable mode
-    conda run -n ontovae pip install -e onto-vae
+    conda run -n ontovae pip install -e /opt/onto-vae
+    conda run -n ontovae pip install pyarrow
 
     # Clean up
-    apt-get clean && rm -rf /var/lib/apt/lists/*
     mamba clean --all -y
 
-    # Now add the script to activate the Conda environment
+    # Activate ontovae environment on container start
     echo '. "/opt/conda/etc/profile.d/conda.sh"' >> $APPTAINER_ENVIRONMENT
     echo 'conda activate ontovae' >> $APPTAINER_ENVIRONMENT
 
 %runscript
-    python data_splits.py
+    # /workspace is bound to the cluster project directory at runtime:
+    #   apptainer run --nv -B /cluster/path/onto-vae:/workspace image.sif [args]
+    cd /workspace
     exec python OntoVAE-Runs.py "$@"

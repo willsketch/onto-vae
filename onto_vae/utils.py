@@ -1,7 +1,7 @@
 import pandas as pd
 import itertools
 import copy
-import pkg_resources
+from pathlib import Path
 
 
 

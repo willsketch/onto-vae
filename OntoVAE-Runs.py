@@ -62,8 +62,10 @@ def load_split(expr_path, split_ids_path, nan_cols, drop_genes, id_col='patient_
 
     if subsample is not None and len(df) > subsample:
         orig_len = len(df)
-        df = df.sample(n=subsample, random_state=42)
-        print(f"  Subsampled to {subsample} cells (from {orig_len} total)")
+        df = df.groupby(label_col, group_keys=False).apply(
+            lambda x: x.sample(n=max(1, int(round(len(x) * subsample / orig_len))), random_state=42)
+        )
+        print(f"  Subsampled to {len(df)} cells (from {orig_len} total, stratified by {label_col})")
 
     labels = df[label_col].copy()
     df = df.drop(columns=nan_cols)

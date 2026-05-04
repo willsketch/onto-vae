@@ -14,3 +14,4 @@ SEADD_job.sbatch
 TCGA_job.sbatch
 splits_TCGA_cluster.zip
 splits_TCGA_cluster/
+SEADD_copy_results.sbatch

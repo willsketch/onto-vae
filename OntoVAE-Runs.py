@@ -79,7 +79,7 @@ def load_split(expr_path, split_ids_path, nan_cols, drop_genes, id_col='patient_
     df.columns.name = None
     return df, labels
 
-#TODO create variable ontology description
+
 def setup_ontology(obo_path, gene_annot_path, top_thresh=1000, bottom_thresh=30, description='GO-untrimmed'):
     """
     Initialize, trim, and create masks for Ontobj.
@@ -116,9 +116,9 @@ def train_ontovae(ontobj, dataset_name, top_thresh, bottom_thresh,
     return model
 
 
-def compute_latent_embeddings(model, ontobj, dataset_name, top_thresh, bottom_thresh):
+def compute_latent_embeddings(model, ontobj, dataset_name, top_thresh, bottom_thresh, batch_size=512):
     """
-    Return latent embeddings for a given dataset.
+    Return latent embeddings for a given dataset, processed in batches to avoid GPU OOM.
     """
     model.eval()
     device = model.device
@@ -132,13 +132,15 @@ def compute_latent_embeddings(model, ontobj, dataset_name, top_thresh, bottom_th
                        f'Match dataset: {dataset_name} with onology object')
     elif ontobj.data[trim_key][dataset_name] is None:
         raise ValueError(f'Dataset in ontology object is None')
-    else:
-        x = torch.tensor(ontobj.data[trim_key][dataset_name], dtype=torch.float32, device=device)
 
+    x = torch.tensor(ontobj.data[trim_key][dataset_name], dtype=torch.float32)
+    chunks = []
     with torch.no_grad():
-        latent_x = model.get_embedding(x).cpu().numpy()
+        for i in range(0, len(x), batch_size):
+            x_batch = x[i:i+batch_size].to(device)
+            chunks.append(model.get_embedding(x_batch).cpu().numpy())
 
-    return latent_x
+    return np.vstack(chunks)
 
 
 def get_non_zero_cols(x):
@@ -147,27 +149,30 @@ def get_non_zero_cols(x):
     return np.where(np.abs(x).sum(axis=0) > epsilon)[0]
 
 
-def mse_loss(model, ontObj, dataset_name, top_thresh, bottom_thresh):
+def mse_loss(model, ontObj, dataset_name, top_thresh, bottom_thresh, batch_size=512):
     """
-    Calculate mse of reconstruction for given dataset.
+    Calculate mse of reconstruction for given dataset, processed in batches to avoid GPU OOM.
     """
     trim_key = f'{top_thresh}_{bottom_thresh}'
 
-    rec_x = model.get_reconstructed_values(ontObj, dataset_name)
-    rec_x = torch.tensor(rec_x, dtype=torch.float32)
-    x = ontObj.data[trim_key][dataset_name]
-    x = torch.tensor(x, dtype=torch.float32)
-
-    #TODO make valid genes_key a variable?
+    x = torch.tensor(ontObj.data[trim_key][dataset_name], dtype=torch.float32)
     valid_genes_key = f"{dataset_name}_GONNECT_GENE_MAP"
     valid_genes_idx = ontObj.data[trim_key][valid_genes_key]
     valid_genes_mask = valid_genes_idx != -1
 
-    rec_x_sub = rec_x[:, valid_genes_idx[valid_genes_mask]]
-    x_sub = x[:, valid_genes_idx[valid_genes_mask]]
+    total_loss = 0.0
+    total_elements = 0
+    model.eval()
+    with torch.no_grad():
+        for i in range(0, len(x), batch_size):
+            x_batch = x[i:i+batch_size].to(model.device)
+            rec_batch, _, _ = model.forward(x_batch)
+            x_sub = x_batch[:, valid_genes_idx[valid_genes_mask]]
+            rec_sub = rec_batch[:, valid_genes_idx[valid_genes_mask]]
+            total_loss += F.mse_loss(rec_sub, x_sub, reduction='sum').item()
+            total_elements += x_sub.numel()
 
-    mse = F.mse_loss(rec_x_sub, x_sub, reduction='mean')
-    return mse.item()
+    return total_loss / total_elements
 
 def save_pathway_activities(model, ontobj, dataset_name, top_thresh, bottom_thresh, save_path, raw=False):
     """
@@ -260,7 +265,6 @@ def run_experiment(run_seed, expr_data_path, split_dir, nan_cols, drop_genes, ba
     # --------------------------
     # Match dataset
     # --------------------------
-    #TODO make dataset name a variable?
     dataset_name_train = f'TCGA_run_seed-{run_seed}-train'
     dataset_name_test = f'TCGA_run_seed-{run_seed}-test'
     ont_train = match_dataset(base_ontObj, combined_train_df, name=dataset_name_train, top_thresh=top_thresh_ontobj,

@@ -66,6 +66,7 @@ def load_split(expr_path, split_ids_path, nan_cols, drop_genes, id_col='patient_
             lambda x: x.sample(n=max(1, int(round(len(x) * subsample / orig_len))), random_state=42)
         )
         print(f"  Subsampled to {len(df)} cells (from {orig_len} total, stratified by {label_col})")
+        print(df[label_col].value_counts().to_string())
 
     labels = df[label_col].copy()
     df = df.drop(columns=nan_cols)

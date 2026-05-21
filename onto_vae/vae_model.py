@@ -254,16 +254,22 @@ class OntoVAE(nn.Module):
 
         val_loss_min = float('inf')
         optimizer = optim.AdamW(self.parameters(), lr = lr)
+        epochs_no_improve = 0
+        patience = 20
 
         for epoch in range(epochs):
             print(f"Epoch {epoch+1} of {epochs}")
             train_epoch_loss = self.train_round(trainloader, lr, kl_coeff, optimizer, run)
             val_epoch_loss = self.val_round(valloader, kl_coeff, run)
-            
+
             if run is not None:
                 run["metrics/train/loss"].log(train_epoch_loss)
                 run["metrics/val/loss"].log(val_epoch_loss)
-                
+
+            if torch.isnan(torch.tensor(train_epoch_loss)) or torch.isnan(torch.tensor(val_epoch_loss)):
+                print(f"NaN loss detected at epoch {epoch+1}, stopping early.")
+                break
+
             if val_epoch_loss < val_loss_min:
                 print('New best model!')
                 torch.save({
@@ -273,9 +279,19 @@ class OntoVAE(nn.Module):
                     'loss': val_epoch_loss,
                 }, modelpath)
                 val_loss_min = val_epoch_loss
-                
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+                if epochs_no_improve >= patience:
+                    print(f"Early stopping at epoch {epoch+1} (no improvement for {patience} epochs).")
+                    break
+
             print(f"Train Loss: {train_epoch_loss:.4f}")
             print(f"Val Loss: {val_epoch_loss:.4f}")
+
+        checkpoint = torch.load(modelpath, map_location=self.device, weights_only=True)
+        self.load_state_dict(checkpoint['model_state_dict'])
+        print(f"Restored best model (epoch {checkpoint['epoch']+1}, val loss {checkpoint['loss']:.4f})")
 
 
     def _pass_data(self, data, output, raw=False):

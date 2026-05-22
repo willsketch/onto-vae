@@ -294,7 +294,7 @@ class OntoVAE(nn.Module):
         print(f"Restored best model (epoch {checkpoint['epoch']+1}, val loss {checkpoint['loss']:.4f})")
 
 
-    def _pass_data(self, data, output, raw=False):
+    def _pass_data(self, data, output, raw=False, batch_size=512):
         """
         Passes data through the model.
 
@@ -308,20 +308,13 @@ class OntoVAE(nn.Module):
         raw
             if True, return individual neuron activations (neuronnum per term)
             instead of averaging. Only applies when output='act'.
+        batch_size
+            number of cells processed per forward pass to avoid GPU OOM
         """
 
-        # set to eval mode
         self.eval()
 
-        # get latent space embedding
-        with torch.no_grad():
-            z = self.get_embedding(data)
-            z = z.to('cpu').detach().numpy()
-
-        if not raw:
-            z = np.array(np.split(z, z.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
-
-        # get activities from decoder
+        # Register hooks once — they fire automatically on every forward call
         activation = {}
         def get_activation(index):
             def hook(model, input, output):
@@ -329,28 +322,34 @@ class OntoVAE(nn.Module):
             return hook
 
         hooks = {}
-
         for i in range(len(self.decoder.decoder)-1):
             key = str(i)
             value = self.decoder.decoder[i][0].register_forward_hook(get_activation(i))
             hooks[key] = value
-
+            
+        z_chunks, act_chunks, rec_chunks = [], [], []
         with torch.no_grad():
-            reconstruction, _, _ = self.forward(data)
+            for i in range(0, len(data), batch_size):
+                batch = data[i:i+batch_size]
+                z_chunks.append(self.get_embedding(batch).to('cpu').detach().numpy())
+                reconstruction, _, _ = self.forward(batch)
+                act_chunks.append(torch.cat(list(activation.values()), dim=1).numpy())
+                rec_chunks.append(reconstruction.to('cpu').detach().numpy())
 
-        act = torch.cat(list(activation.values()), dim=1).numpy()
-        if not raw:
-            act = np.array(np.split(act, act.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
-
-        # remove hooks
         for h in hooks:
             hooks[h].remove()
 
-        # return pathway activities or reconstructed gene values
+        z = np.vstack(z_chunks)
+        act = np.vstack(act_chunks)
+
+        if not raw:
+            z = np.array(np.split(z, z.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
+            act = np.array(np.split(act, act.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
+
         if output == 'act':
             return np.hstack((z, act))
         if output == 'rec':
-            return reconstruction.to('cpu').detach().numpy()
+            return np.vstack(rec_chunks)
 
 
     def get_pathway_activities(self, ontobj, dataset, terms=None, raw=False):

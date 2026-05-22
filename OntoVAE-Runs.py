@@ -213,11 +213,15 @@ def clustering_metrics(latent, labels, seed=42):
     kmeans = KMeans(n_clusters=n_clusters, random_state=seed)
     cluster_assignments = kmeans.fit_predict(latent)
 
+    unique, counts = np.unique(cluster_assignments, return_counts=True)
+    print(f"  KMeans: requested {n_clusters} clusters, got {len(unique)} non-empty — sizes: {dict(zip(unique.tolist(), counts.tolist()))}")
+
     nmi = normalized_mutual_info_score(labels, cluster_assignments)
     ari = adjusted_rand_score(labels, cluster_assignments)
 
-    # Silhouette requires >1 cluster
-    sil_score = silhouette_score(latent, cluster_assignments) if n_clusters > 1 else np.nan
+    # Silhouette requires >1 unique cluster in the actual assignments
+    n_unique = len(unique)
+    sil_score = silhouette_score(latent, cluster_assignments) if n_unique > 1 else np.nan
 
     return {'NMI': nmi, 'ARI': ari, 'Silhouette': sil_score}
 
@@ -321,6 +325,7 @@ def run_experiment(run_seed, expr_data_path, split_dir, nan_cols, drop_genes, ba
 
         latent_test = compute_latent_embeddings(model, ont_test, dataset_name_test,
                                                 top_thresh=top_thresh_ontobj, bottom_thresh=bottom_thresh_ontobj)
+        print(f"  [{condition}] latent_test NaN: {np.isnan(latent_test).any()}, unique rows: {len(np.unique(latent_test, axis=0))}/{len(latent_test)}")
         metrics_test = clustering_metrics(latent_test, test_labels)
         metrics_test['mse'] = mse_test
 
